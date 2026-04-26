@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import {
   ChevronLeft,
@@ -11,61 +11,103 @@ import {
   FlaskConical,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { initFromSupabase, getLatestEntry } from "@/lib/storage"
+import type { LogEntry } from "@/lib/types"
 
-const currentValues = {
-  pH: "7.4",
-  Cl: "2.0 ppm",
-  Temp: "29.3°C",
-  Redox: "743 mV",
+interface Message {
+  id: number
+  role: "user" | "assistant"
+  content: string
 }
 
-const initialMessages = [
-  {
-    id: 1,
-    role: "assistant" as const,
-    content:
-      "Ahoj! Som tvoj AI asistent pre starostlivosť o bazén. Môžem ti pomôcť s otázkami o kvalite vody, údržbe, alebo dávkovaní chémie. Čo by si chcel vedieť?",
-  },
-]
+const INITIAL_MESSAGE: Message = {
+  id: 1,
+  role: "assistant",
+  content:
+    "Ahoj! Som tvoj AI asistent pre starostlivosť o bazén. Môžem ti pomôcť s otázkami o kvalite vody, údržbe, alebo dávkovaní chémie. Čo by si chcel vedieť?",
+}
 
 export default function AIAssistantPage() {
   const router = useRouter()
-  const [messages, setMessages] = useState(initialMessages)
+  const [messages, setMessages] = useState<Message[]>([INITIAL_MESSAGE])
   const [input, setInput] = useState("")
   const [isTyping, setIsTyping] = useState(false)
+  const [entry, setEntry] = useState<LogEntry | null>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
 
-  const handleSend = () => {
-    if (!input.trim()) return
+  useEffect(() => {
+    initFromSupabase().then(({ entries }) => {
+      setEntry(getLatestEntry(entries))
+    })
+  }, [])
 
-    const userMessage = {
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages, isTyping])
+
+  const poolValues = entry
+    ? {
+        pH: entry.tester?.pH ?? entry.aseco?.pH,
+        chlór: entry.tester?.Cl,
+        teplota: entry.tester?.temp,
+        redox: entry.aseco?.redox,
+        salinita: entry.aseco?.salinity,
+        alkalinita: entry.tester?.alkalinity,
+      }
+    : null
+
+  const handleSend = async () => {
+    if (!input.trim() || isTyping) return
+
+    const userMessage: Message = {
       id: messages.length + 1,
-      role: "user" as const,
+      role: "user",
       content: input,
     }
 
-    setMessages((prev) => [...prev, userMessage])
+    const updatedMessages = [...messages, userMessage]
+    setMessages(updatedMessages)
     setInput("")
     setIsTyping(true)
 
-    // Simulate AI response
-    setTimeout(() => {
-      const responses = [
-        "Na základe aktuálnych hodnôt pH 7.4 a chlóru 2.0 ppm, tvoj bazén je v dobrom stave. Odporúčam však mierne znížiť dávkovanie chlóru, keďže hodnota je na hornej hranici optimálneho rozmedzia.",
-        "Teplota vody 29.3°C je ideálna pre pohodlné plávanie. Pri tejto teplote sa môže chlór rýchlejšie vyparovať, preto sleduj jeho hladinu častejšie.",
-        "Redox hodnota 743 mV indikuje dobrú dezinfekčnú schopnosť vody. Ak by klesla pod 650 mV, odporúčam zvýšiť dávku chlóru.",
-        "Pre optimálnu kvalitu vody odporúčam kontrolovať pH a chlór aspoň 2-3x týždenne, zvlášť počas horúcich dní keď sa bazén používa častejšie.",
-      ]
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: updatedMessages.map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+          poolValues,
+        }),
+      })
 
-      const aiMessage = {
-        id: messages.length + 2,
-        role: "assistant" as const,
-        content: responses[Math.floor(Math.random() * responses.length)],
+      const data = await res.json()
+      const aiMessage: Message = {
+        id: updatedMessages.length + 1,
+        role: "assistant",
+        content: data.content ?? "Prepáč, nastala chyba. Skús znova.",
       }
-
       setMessages((prev) => [...prev, aiMessage])
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: prev.length + 1,
+          role: "assistant",
+          content: "Prepáč, nastala chyba pri komunikácii. Skús znova.",
+        },
+      ])
+    } finally {
       setIsTyping(false)
-    }, 1500)
+    }
   }
+
+  const pH = entry?.tester?.pH ?? entry?.aseco?.pH ?? "—"
+  const cl = entry?.tester?.Cl ?? "—"
+  const temp = entry?.tester?.temp ?? "—"
+  const redox = entry?.aseco?.redox ?? "—"
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -96,25 +138,25 @@ export default function AIAssistantPage() {
               icon={<FlaskConical className="w-4 h-4" />}
               iconBgColor="bg-[#5856D6]"
               label="pH"
-              value={currentValues.pH}
+              value={pH}
             />
             <ContextItem
               icon={<Droplets className="w-4 h-4" />}
               iconBgColor="bg-[#00E5CC]"
               label="Cl"
-              value={currentValues.Cl}
+              value={cl !== "—" ? `${cl} ppm` : "—"}
             />
             <ContextItem
               icon={<Thermometer className="w-4 h-4" />}
               iconBgColor="bg-[#FF9500]"
               label="Temp"
-              value={currentValues.Temp}
+              value={temp !== "—" ? `${temp}°C` : "—"}
             />
             <ContextItem
               icon={<Zap className="w-4 h-4" />}
               iconBgColor="bg-[#FF2D55]"
               label="Redox"
-              value={currentValues.Redox}
+              value={redox !== "—" ? `${redox} mV` : "—"}
             />
           </div>
         </div>
@@ -163,6 +205,8 @@ export default function AIAssistantPage() {
             </div>
           </div>
         )}
+
+        <div ref={bottomRef} />
       </div>
 
       {/* Input */}
@@ -178,10 +222,10 @@ export default function AIAssistantPage() {
           />
           <button
             onClick={handleSend}
-            disabled={!input.trim()}
+            disabled={!input.trim() || isTyping}
             className={cn(
               "w-12 h-12 rounded-full flex items-center justify-center transition-colors",
-              input.trim()
+              input.trim() && !isTyping
                 ? "bg-primary text-primary-foreground"
                 : "bg-secondary text-muted-foreground"
             )}
