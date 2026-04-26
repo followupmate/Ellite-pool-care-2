@@ -16,41 +16,33 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import {
+  initFromSupabase,
+  saveToStorage,
+  loadFromStorage,
+  computeStatus,
+} from "@/lib/storage"
+import type { LogEntry } from "@/lib/types"
 
-const mockEntries = [
-  {
-    id: 1,
-    date: "24. apríl 2026",
-    time: "14:30",
-    status: "ok" as const,
-    pH: "7.4",
-    Cl: "1.8",
-    temp: "28.5",
-  },
-  {
-    id: 2,
-    date: "23. apríl 2026",
-    time: "10:15",
-    status: "warning" as const,
-    pH: "7.6",
-    Cl: "2.3",
-    temp: "29.1",
-  },
-  {
-    id: 3,
-    date: "22. apríl 2026",
-    time: "16:00",
-    status: "ok" as const,
-    pH: "7.3",
-    Cl: "2.0",
-    temp: "28.8",
-  },
-]
+function formatDate(dateStr: string): string {
+  try {
+    return new Date(dateStr).toLocaleDateString("sk-SK", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    })
+  } catch {
+    return dateStr
+  }
+}
 
 function DiaryContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const [showForm, setShowForm] = useState(false)
+  const [entries, setEntries] = useState<LogEntry[]>([])
+  const [saving, setSaving] = useState(false)
+
   const [expandedSections, setExpandedSections] = useState({
     datetime: true,
     maintenance: false,
@@ -83,6 +75,17 @@ function DiaryContent() {
     notes: "",
   })
 
+  // Load data on mount
+  useEffect(() => {
+    const cached = loadFromStorage<LogEntry[]>("epc_log_entries")
+    if (cached?.length) {
+      setEntries(cached)
+    }
+    initFromSupabase().then(({ entries: remote }) => {
+      if (remote.length) setEntries(remote)
+    })
+  }, [])
+
   useEffect(() => {
     if (searchParams.get("new") === "true") {
       setShowForm(true)
@@ -112,7 +115,43 @@ function DiaryContent() {
     }))
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    setSaving(true)
+    const newEntry: LogEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      date: formData.date,
+      time: formData.time,
+      createdAt: new Date().toISOString(),
+      maintenance: {
+        filterMech: formData.filterMech,
+        filterBackwash: formData.filterBackwash,
+        vacuum: formData.vacuum,
+        pumpBasket: formData.pumpBasket,
+      },
+      chemistry: {
+        salt: formData.salt || undefined,
+        phMinus: formData.phMinus || undefined,
+        algicide: formData.algicide || undefined,
+        flocculant: formData.flocculant || undefined,
+      },
+      tester: {
+        pH: formData.pH || undefined,
+        Cl: formData.Cl || undefined,
+        alkalinity: formData.alkalinity || undefined,
+        temp: formData.tempTester || undefined,
+      },
+      aseco: {
+        salinity: formData.salinity || undefined,
+        algicide: formData.algicideAseco || undefined,
+        redox: formData.redox || undefined,
+        pH: formData.phAseco || undefined,
+      },
+      notes: formData.notes || undefined,
+    }
+
+    await saveToStorage(newEntry)
+    setEntries((prev) => [newEntry, ...prev])
+    setSaving(false)
     setShowForm(false)
     router.push("/dennik")
   }
@@ -138,7 +177,8 @@ function DiaryContent() {
               </h1>
               <button
                 onClick={handleSave}
-                className="w-10 h-10 rounded-full bg-primary flex items-center justify-center"
+                disabled={saving}
+                className="w-10 h-10 rounded-full bg-primary flex items-center justify-center disabled:opacity-60"
               >
                 <Check className="w-5 h-5 text-primary-foreground" />
               </button>
@@ -376,38 +416,69 @@ function DiaryContent() {
         </div>
       ) : (
         <div className="px-5 space-y-3">
-          {mockEntries.map((entry) => (
-            <div
-              key={entry.id}
-              className="bg-card rounded-[20px] p-4 space-y-3"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-semibold text-foreground">{entry.date}</p>
-                  <p className="text-sm text-muted-foreground">{entry.time}</p>
-                </div>
-                <StatusBadge status={entry.status} />
-              </div>
-              <div className="flex gap-4">
-                <div>
-                  <p className="text-xs text-muted-foreground">pH</p>
-                  <p className="font-semibold text-foreground">{entry.pH}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Cl</p>
-                  <p className="font-semibold text-foreground">
-                    {entry.Cl} ppm
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Teplota</p>
-                  <p className="font-semibold text-foreground">
-                    {entry.temp}°C
-                  </p>
-                </div>
-              </div>
+          {entries.length === 0 ? (
+            <div className="bg-card rounded-[20px] p-8 text-center">
+              <p className="text-muted-foreground text-sm">
+                Zatiaľ žiadne záznamy. Pridaj prvé meranie.
+              </p>
             </div>
-          ))}
+          ) : (
+            entries.map((entry) => {
+              const status = computeStatus(entry)
+              const pH = entry.tester?.pH ?? entry.aseco?.pH ?? "—"
+              const cl = entry.tester?.Cl ?? "—"
+              const temp = entry.tester?.temp ?? "—"
+              return (
+                <div
+                  key={entry.id}
+                  className="bg-card rounded-[20px] p-4 space-y-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-semibold text-foreground">
+                        {formatDate(entry.date)}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        {entry.time}
+                      </p>
+                    </div>
+                    <StatusBadge status={status} />
+                  </div>
+                  <div className="flex gap-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground">pH</p>
+                      <p className="font-semibold text-foreground">{pH}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Cl</p>
+                      <p className="font-semibold text-foreground">
+                        {cl !== "—" ? `${cl} ppm` : "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Teplota</p>
+                      <p className="font-semibold text-foreground">
+                        {temp !== "—" ? `${temp}°C` : "—"}
+                      </p>
+                    </div>
+                    {entry.aseco?.redox && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Redox</p>
+                        <p className="font-semibold text-foreground">
+                          {entry.aseco.redox} mV
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  {entry.notes && (
+                    <p className="text-xs text-muted-foreground border-t border-border pt-2">
+                      {entry.notes}
+                    </p>
+                  )}
+                </div>
+              )
+            })
+          )}
         </div>
       )}
 
@@ -485,7 +556,10 @@ function InputField({
   return (
     <div>
       <label className="text-xs text-muted-foreground mb-1.5 block">
-        {label} {unit && <span className="text-muted-foreground/60">({unit})</span>}
+        {label}{" "}
+        {unit && (
+          <span className="text-muted-foreground/60">({unit})</span>
+        )}
       </label>
       <Input
         type="number"
