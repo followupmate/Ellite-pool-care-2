@@ -19,8 +19,12 @@ export function getSupabaseClient(): SupabaseClient | null {
   }
 
   if (!_client) {
-    _client = createClient(url.trim(), key.trim())
-    console.log("[supabase] Client created")
+    // Strip any trailing /rest/v1 the env var might accidentally contain —
+    // createClient appends it internally, so a double path would result in
+    // requests going to /rest/v1/rest/v1/...
+    const cleanUrl = url.trim().replace(/\/rest\/v1\/?$/, "")
+    _client = createClient(cleanUrl, key.trim())
+    console.log("[supabase] Client created for", cleanUrl.slice(0, 30) + "…")
   }
 
   return _client
