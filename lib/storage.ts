@@ -100,9 +100,9 @@ export async function initFromSupabase(): Promise<{
     if (logRes.error) {
       console.error("[storage] initFromSupabase logRes error:", logRes.error.message, logRes.error.details)
     } else if (logRes.data && logRes.data.length > 0) {
-      entries = logRes.data.map(
-        (row: { id: string; data: LogEntry }) => row.data
-      )
+      entries = logRes.data
+        .map((row: { id: string; data: LogEntry }) => row.data)
+        .filter((e): e is LogEntry => !!e && typeof e === "object" && "id" in e)
       saveToLocalStorage(LOG_KEY, entries)
     }
 
@@ -137,8 +137,8 @@ export function computeStatus(
   entry: LogEntry | null
 ): "ok" | "warning" | "danger" {
   if (!entry) return "ok"
-  const pH = parseFloat(entry.tester.pH ?? entry.aseco.pH ?? "7.2")
-  const cl = parseFloat(entry.tester.Cl ?? "1.0")
+  const pH = parseFloat(entry.tester?.pH ?? entry.aseco?.pH ?? "7.2")
+  const cl = parseFloat(entry.tester?.Cl ?? "1.0")
   if (pH < 6.8 || pH > 7.8 || cl < 0.3 || cl > 3.0) return "danger"
   if (pH < 7.0 || pH > 7.6 || cl < 0.5 || cl > 2.5) return "warning"
   return "ok"
