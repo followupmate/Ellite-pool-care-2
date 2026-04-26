@@ -41,9 +41,12 @@ export async function saveToStorage(entry: LogEntry): Promise<void> {
   const client = getSupabaseClient()
   if (!client) return
   try {
-    await client.from("ep_log_entries").upsert({ id: entry.id, data: entry })
-  } catch {
-    // offline — data stays in localStorage until next sync
+    const { error } = await client
+      .from("ep_log_entries")
+      .upsert({ id: entry.id, data: entry })
+    if (error) console.error("[storage] saveToStorage error:", error.message, error.details)
+  } catch (e) {
+    console.error("[storage] saveToStorage exception:", e)
   }
 }
 
@@ -57,9 +60,10 @@ export async function deleteEntry(id: string): Promise<void> {
   const client = getSupabaseClient()
   if (!client) return
   try {
-    await client.from("ep_log_entries").delete().eq("id", id)
-  } catch {
-    // offline
+    const { error } = await client.from("ep_log_entries").delete().eq("id", id)
+    if (error) console.error("[storage] deleteEntry error:", error.message)
+  } catch (e) {
+    console.error("[storage] deleteEntry exception:", e)
   }
 }
 
@@ -84,24 +88,35 @@ export async function initFromSupabase(): Promise<{
       client
         .from("ep_log_entries")
         .select("id, data")
-        .order("data->createdAt", { ascending: false })
+        // Sort by inserted row id descending — avoids jsonb path ordering issues
+        .order("id", { ascending: false })
         .limit(100),
       client.from("ep_pool_data").select("*").limit(1).single(),
     ])
 
-    if (logRes.data && logRes.data.length > 0) {
+    console.log("[storage] logRes:", logRes.error ?? `${logRes.data?.length ?? 0} rows`)
+    console.log("[storage] poolRes:", poolRes.error ?? "ok")
+
+    if (logRes.error) {
+      console.error("[storage] initFromSupabase logRes error:", logRes.error.message, logRes.error.details)
+    } else if (logRes.data && logRes.data.length > 0) {
       entries = logRes.data.map(
         (row: { id: string; data: LogEntry }) => row.data
       )
       saveToLocalStorage(LOG_KEY, entries)
     }
 
-    if (poolRes.data) {
+    if (poolRes.error) {
+      // PGRST116 = no rows — not a real error when pool not yet configured
+      if (poolRes.error.code !== "PGRST116") {
+        console.error("[storage] initFromSupabase poolRes error:", poolRes.error.message)
+      }
+    } else if (poolRes.data) {
       poolData = poolRes.data as PoolData
       saveToLocalStorage(POOL_KEY, poolData)
     }
-  } catch {
-    // network error — use cached data
+  } catch (e) {
+    console.error("[storage] initFromSupabase exception:", e)
   }
 
   return { entries, poolData }
